@@ -13,3 +13,12 @@ npm-debug.log*
 
 #environment
 .env
+
+
+/assets
+/config
+/layout
+/locales
+/sections
+/templates
+/snippets

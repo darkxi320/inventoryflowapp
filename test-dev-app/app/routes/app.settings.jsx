@@ -52,7 +52,7 @@ export default function SettingsPage() {
     socket.on("jobCompleted", (data) => {
       if (data.jobId === jobId) {
         setProgress(100);
-        setUploadStatus("✅ Upload and processing completed successfully!");
+        setUploadStatus("Upload and processing completed successfully!");
         setLoading(false);
         setEstimatedTime("");
         setJobId(null);
