@@ -28,7 +28,9 @@ export default function SettingsPage() {
     const urlParams = new URLSearchParams(window.location.search);
     const shopOrigin = urlParams.get("shop");
     if (shopOrigin) {
-      const cleanedShopUrl = shopOrigin.replace("https://", "").replace("www.", "");
+      const cleanedShopUrl = shopOrigin
+        .replace("https://", "")
+        .replace("www.", "");
       setShopDomain(cleanedShopUrl);
     }
 
@@ -62,15 +64,6 @@ export default function SettingsPage() {
       socket.off("jobCompleted");
     };
   }, [jobId, startTime]);
-
-  useEffect(() => {
-    if (progress === 100) {
-      setUploadStatus("✅ Upload and processing completed successfully!");
-      setLoading(false);
-      setEstimatedTime("");
-      setJobId(null);
-    }
-  }, [progress]);
 
   const calculateDynamicETR = (progress) => {
     if (!startTime || progress === 0) {
@@ -115,7 +108,9 @@ export default function SettingsPage() {
         setUploadStatus("File uploaded. Processing started...");
       } else {
         const errorData = await response.json();
-        setUploadStatus(`Upload failed: ${errorData.message || "Unknown error"}`);
+        setUploadStatus(
+          `Upload failed: ${errorData.message || "Unknown error"}`,
+        );
         setLoading(false);
         setEstimatedTime("");
       }
@@ -201,66 +196,72 @@ export default function SettingsPage() {
                   uploadStatus.includes("completed")
                     ? "success"
                     : uploadStatus.includes("failed")
-                    ? "critical"
-                    : "info"
+                      ? "critical"
+                      : "info"
                 }
                 onDismiss={() => setUploadStatus("")}
               >
                 <Text variant="bodyMd" align="center">
                   {uploadStatus}
                 </Text>
-                {uploadStatus.includes("completed") && (
+                {(uploadStatus.includes("completed") ||
+                  uploadStatus.includes("failed")) && (
                   <Button onClick={resetForm} plain>
-                    Upload Another
-                  </Button>
-                )}
-                {uploadStatus.includes("failed") && (
-                  <Button onClick={resetForm} plain>
-                    Try Again
+                    {uploadStatus.includes("completed")
+                      ? "Upload Another"
+                      : "Try Again"}
                   </Button>
                 )}
               </Banner>
             )}
           </Card>
         </Layout.Section>
+
         <Layout.Section>
-              <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: "1rem",
-            width: "50%",
-            margin: "1.5rem 0 0 0",
-            padding: "20px",
-            backgroundColor: "#ffffff",
-            borderRadius: "12px",
-            boxShadow: "0 4px 12px rgba(0, 0, 0, 0.1)",
-            textAlign: "Left",
-            fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
-            fontSize: "20px",
-          }}
-        >
-          <Card
-            title="Sample CSV File"
-            sectioned
+          <div
             style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: "1rem",
+              width: "50%",
+              margin: "1.5rem 0 0 0",
+              padding: "20px",
               backgroundColor: "#ffffff",
-              borderRadius: "8px",
-              boxShadow: "0 3px 8px rgb(0 0 0 / 0.15)",
-              marginTop: "1.5rem",
-              padding: "16px",
-              textAlign: "center",
+              borderRadius: "12px",
+              boxShadow: "0 4px 12px rgba(0, 0, 0, 0.1)",
+              textAlign: "Left",
+              fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
+              fontSize: "20px",
             }}
           >
-            <Text variant="bodyMd" color="subdued" style={{ marginBottom: "1rem", fontSize: "50px" }}>
-              Download sample CSV </Text>
-            <Button
-              primary
-              onClick={() => window.open("/sample-csv/inventory-sample.csv", "_blank")}
+            <Card
+              title="Sample CSV File"
+              sectioned
+              style={{
+                backgroundColor: "#ffffff",
+                borderRadius: "8px",
+                boxShadow: "0 3px 8px rgb(0 0 0 / 0.15)",
+                marginTop: "1.5rem",
+                padding: "16px",
+                textAlign: "center",
+              }}
             >
-              Download Sample CSV
-            </Button>
-          </Card>
+              <Text
+                variant="bodyMd"
+                color="subdued"
+                style={{ marginBottom: "1rem", fontSize: "50px" }}
+              >
+                Download sample CSV
+              </Text>
+              <Button
+                primary
+                onClick={() =>
+                  window.open("/sample-csv/inventory-sample.csv", "_blank")
+                }
+              >
+                Download Sample CSV
+              </Button>
+            </Card>
           </div>
         </Layout.Section>
       </Layout>
