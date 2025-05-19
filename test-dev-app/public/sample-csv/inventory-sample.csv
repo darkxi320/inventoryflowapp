@@ -1,0 +1,3 @@
+sku,quantity,price,tags,handle,productType,descriptionHtml,status,vendor,title,options,barcode
+SKU123,10,19.99,"tag1,tag2",product-handle-1,Type1,"<p>Product 1 description</p>",ACTIVE,Vendor1,Product 1,"Material",1234567890123
+SKU124,5,29.99,"tag3,tag4",product-handle-2,Type2,"<p>Product 2 description</p>",ACTIVE,Vendor2,Product 2,"Size,Color",1234567890124

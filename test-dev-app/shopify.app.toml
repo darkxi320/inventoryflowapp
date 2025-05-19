@@ -1,0 +1,36 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "4ffbd94850ed00b9731d882998fef1c2"
+application_url = "https://listprice-after-tracks-super.trycloudflare.com"
+embedded = true
+name = "inventoryFlow"
+handle = "inventoryflow"
+
+[build]
+include_config_on_deploy = true
+automatically_update_urls_on_dev = true
+
+[webhooks]
+api_version = "2025-01"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "/webhooks/app/uninstalled"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/scopes_update" ]
+  uri = "/webhooks/app/scopes_update"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "write_products, read_products, read_inventory, write_inventory, read_locations"
+
+[auth]
+redirect_urls = [
+  "https://listprice-after-tracks-super.trycloudflare.com/auth/callback",
+  "https://listprice-after-tracks-super.trycloudflare.com/auth/shopify/callback",
+  "https://listprice-after-tracks-super.trycloudflare.com/api/auth/callback"
+]
+
+[pos]
+embedded = false
