@@ -105,7 +105,7 @@ export default function SettingsPage() {
       });
 
       if (response.ok) {
-        setUploadStatus("File uploaded. Processing started...");
+        setUploadStatus("File uploaded successfully.");
       } else {
         const errorData = await response.json();
         setUploadStatus(
@@ -194,7 +194,7 @@ export default function SettingsPage() {
               <Banner
                 status={
                   uploadStatus.includes("completed")
-                    ? "success"
+                    ? "successfully"
                     : uploadStatus.includes("failed")
                       ? "critical"
                       : "info"
@@ -204,10 +204,10 @@ export default function SettingsPage() {
                 <Text variant="bodyMd" align="center">
                   {uploadStatus}
                 </Text>
-                {(uploadStatus.includes("completed") ||
+                {(uploadStatus.includes("successfully") ||
                   uploadStatus.includes("failed")) && (
                   <Button onClick={resetForm} plain>
-                    {uploadStatus.includes("completed")
+                    {uploadStatus.includes("successfully")
                       ? "Upload Another"
                       : "Try Again"}
                   </Button>

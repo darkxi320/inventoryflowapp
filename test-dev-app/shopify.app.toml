@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "4ffbd94850ed00b9731d882998fef1c2"
-application_url = "https://listprice-after-tracks-super.trycloudflare.com"
+application_url = "https://pierre-phone-content-desired.trycloudflare.com"
 embedded = true
 name = "inventoryFlow"
 handle = "inventoryflow"
@@ -27,9 +27,9 @@ scopes = "write_products, read_products, read_inventory, write_inventory, read_l
 
 [auth]
 redirect_urls = [
-  "https://listprice-after-tracks-super.trycloudflare.com/auth/callback",
-  "https://listprice-after-tracks-super.trycloudflare.com/auth/shopify/callback",
-  "https://listprice-after-tracks-super.trycloudflare.com/api/auth/callback"
+  "https://pierre-phone-content-desired.trycloudflare.com/auth/callback",
+  "https://pierre-phone-content-desired.trycloudflare.com/auth/shopify/callback",
+  "https://pierre-phone-content-desired.trycloudflare.com/api/auth/callback"
 ]
 
 [pos]

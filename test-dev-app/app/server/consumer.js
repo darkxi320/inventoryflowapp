@@ -1,4 +1,5 @@
 import express from "express";
+import Queue from "bull";
 import { fetch } from "undici";
 import dotenv from "dotenv";
 import { Server } from "socket.io";
@@ -15,26 +16,51 @@ import crypto from "crypto";
 import session from "express-session";
 
 dotenv.config();
-
 const app = express();
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const applicationUrl = "http://localhost:4001";
 
-const reactBuildPath = path.resolve(__dirname, "../routes/build");
+const applicationUrl = "http://localhost:4001"; // Your app URL
+
+// Serve React static files (adjust path to where your React build will be copied in Docker)
+const reactBuildPath = path.resolve(__dirname, "../routes/build");  // if React app is in app/routes
 app.use(express.static(reactBuildPath));
 
+// SPA fallback to index.html for client-side routing
 app.get("*", (req, res, next) => {
-  if (
-    req.path.startsWith("/upload") ||
-    req.path.startsWith("/shopify") ||
-    req.path.startsWith("/socket.io")
-  ) {
-    return next();
+  // If the request is NOT to your API or static files, serve React's index.html
+  if (req.path.startsWith("/upload") || req.path.startsWith("/shopify") || req.path.startsWith("/socket.io")) {
+    return next(); // Let those requests go through backend handlers
   }
   res.sendFile(path.join(reactBuildPath, "index.html"));
 });
 
+
+// const queue = new Queue("inventory-update-queue", {
+//   redis: {
+//     host: "master.redis-shopify.hsk4q2.use1.cache.amazonaws.com",
+//     port: 6379,
+//     tls: {}, // enable TLS connection
+//     password: "thistokenforshopify777"
+//   },
+// });
+
+// queue.on('error', (err) => {
+//   console.error('Error connecting to Redis:', err);
+// });
+
+// queue.on('ready', () => {
+//   console.log('Connected to Redis ElastiCache');
+// });
+
+// queue.add({ data: 'some data' });
+
+
+
+
+
+// Setup session middleware
 app.use(
   session({
     secret: process.env.SESSION_SECRET,
@@ -43,7 +69,7 @@ app.use(
     cookie: {
       secure: process.env.NODE_ENV === "production",
       httpOnly: true,
-      maxAge: 3600000,
+      maxAge: 3600000, // Session expiration time (1 hour)
     },
   })
 );
@@ -60,7 +86,6 @@ const uploadsDir = path.resolve(__dirname, "uploads");
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir);
 
 const upload = multer({ dest: uploadsDir });
-
 const server = new http.Server(app);
 const io = new Server(server, {
   cors: { origin: "http://localhost:3000", methods: ["GET", "POST"] },
@@ -72,20 +97,25 @@ io.on("connection", (socket) => {
   console.log("Socket connected:", socket.id);
 });
 
+// Function to get valid access token
 async function getValidAccessToken(shop) {
   const session = await prisma.session.findFirst({ where: { shop } });
   if (!session || !session.accessToken) throw new Error("No valid access token for shop.");
-  if (session.revoked) throw new Error("Access token has been revoked.");
-  return session.accessToken;
+  else if (session.revoked) throw new Error("Access token has been revoked.");
+  else return session.accessToken;
 }
 
+// Helper function to get the correct Shopify Admin API URL for a given store
 function getShopifyAdminApiUrl(shopDomain) {
   return `https://${shopDomain}/admin/api/2025-01/graphql.json`;
 }
 
+// Shopify OAuth flow
 app.get("/shopify/authorize", (req, res) => {
   const shop = req.query.shop;
-  if (!shop) return res.status(400).send("Shop domain is required.");
+  if (!shop) {
+    return res.status(400).send("Shop domain is required.");
+  }
 
   const apiKey = process.env.SHOPIFY_API_KEY;
   const scopes = "read_products,write_products,read_locations";
@@ -97,15 +127,22 @@ app.get("/shopify/authorize", (req, res) => {
   const shopifyAuthUrl = `https://${shop}/admin/oauth/authorize?client_id=${apiKey}&scope=${scopes}&redirect_uri=${encodeURIComponent(
     redirectUri
   )}&state=${state}`;
-
   console.log(`Redirecting to Shopify OAuth URL: ${shopifyAuthUrl}`);
+
   res.redirect(shopifyAuthUrl);
 });
 
+// Shopify OAuth callback handler
 app.get("/shopify/callback", async (req, res) => {
   const { code, shop, state } = req.query;
-  if (!shop || !code || !state) return res.status(400).send("Shop, code, or state missing.");
-  if (state !== req.session.state) return res.status(400).send("State mismatch.");
+
+  if (!shop || !code || !state) {
+    return res.status(400).send("Shop, code, or state missing in callback.");
+  }
+
+  if (state !== req.session.state) {
+    return res.status(400).send("State mismatch.");
+  }
 
   const apiKey = process.env.SHOPIFY_API_KEY;
   const apiSecret = process.env.SHOPIFY_API_SECRET;
@@ -114,7 +151,7 @@ app.get("/shopify/callback", async (req, res) => {
   const tokenRequestBody = new URLSearchParams({
     client_id: apiKey,
     client_secret: apiSecret,
-    code,
+    code: code,
     redirect_uri: redirectUri,
   });
 
@@ -122,7 +159,9 @@ app.get("/shopify/callback", async (req, res) => {
     const response = await fetch(`https://${shop}/admin/oauth/access_token`, {
       method: "POST",
       body: tokenRequestBody,
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
     });
 
     const data = await response.json();
@@ -133,7 +172,9 @@ app.get("/shopify/callback", async (req, res) => {
 
       await prisma.session.deleteMany({ where: { shop } });
 
-      let shopRecord = await prisma.shop.findUnique({ where: { shopDomain: shop } });
+      let shopRecord = await prisma.shop.findUnique({
+        where: { shopDomain: shop },
+      });
 
       if (shopRecord) {
         shopRecord = await prisma.shop.update({
@@ -146,7 +187,7 @@ app.get("/shopify/callback", async (req, res) => {
         });
       }
 
-      await prisma.session.create({
+      const sessionRecord = await prisma.session.create({
         data: { shop, accessToken, state, isOnline: true },
       });
 
@@ -164,11 +205,13 @@ app.post("/upload", upload.single("file"), async (req, res) => {
   const shopDomain = req.headers["shop-domain"];
   if (!shopDomain) return res.status(400).json({ message: "Missing shop domain" });
 
+  // Ensure shop exists (create if not)
   let shopRecord = await prisma.shop.findUnique({ where: { shopDomain } });
   if (!shopRecord) {
     shopRecord = await prisma.shop.create({ data: { shopDomain } });
   }
 
+  // Get access token from session
   const session = await prisma.session.findFirst({ where: { shop: shopDomain } });
   if (!session || !session.accessToken) {
     return res.status(401).json({ message: "Session token not found. Please reauthorize the app." });
@@ -194,6 +237,8 @@ app.post("/upload", upload.single("file"), async (req, res) => {
     .on("end", async () => {
       if (hasErrorOccurred) return;
 
+      console.log("CSV parsing complete. Starting processing...");
+
       try {
         const locationIds = await getLocationIds(accessToken, shopDomain);
         if (!locationIds || locationIds.length === 0) {
@@ -214,18 +259,9 @@ app.post("/upload", upload.single("file"), async (req, res) => {
           if (hasErrorOccurred) break;
 
           const {
-            sku,
-            quantity,
-            price,
-            barcode,
-            tags,
-            handle,
-            productType,
-            descriptionHtml,
-            status,
-            vendor,
-            title,
-            options,
+            sku, quantity, price, barcode,
+            tags, handle, productType, descriptionHtml,
+            status, vendor, title, options
           } = row;
 
           if (!sku || !quantity || !price || !barcode) {
@@ -251,6 +287,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
           const existingVariant = await checkVariantExistsBySku(sku, accessToken, shopDomain);
 
           if (existingVariant) {
+            // Update inventory & price
             await updateInventoryInBatch(existingVariant.inventoryItemId, qty, locationId, accessToken, shopDomain);
             await updatePricesInBatch(existingVariant.variantId, prc, accessToken, shopDomain);
 
@@ -267,15 +304,16 @@ app.post("/upload", upload.single("file"), async (req, res) => {
               },
             });
           } else {
+            // Prepare input for new product creation
             const input = {
               title: title || "",
-              tags: tags ? tags.split(",").map((t) => t.trim()).join(", ") : "",
+              tags: tags ? tags.split(",").map(t => t.trim()).join(", ") : "",
               handle: handle || "",
               productType: productType || "",
               descriptionHtml: descriptionHtml || "",
               status: status || "DRAFT",
               vendor: vendor || "",
-              options: options ? options.split(",").map((opt) => ({ name: opt.trim() })) : [],
+              options: options ? options.split(",").map(opt => ({ name: opt.trim() })) : [],
             };
 
             const productId = await createProduct(input, accessToken, shopDomain, sku, prc, qty, barcode, options);
@@ -300,15 +338,13 @@ app.post("/upload", upload.single("file"), async (req, res) => {
               },
             });
 
-            const variants = [
-              {
-                sku,
-                price: prc,
-                barcode,
-                quantity: qty,
-                options: options ? options.split(",").map((opt) => ({ name: opt.trim() })) : [],
-              },
-            ];
+            const variants = [{
+              sku,
+              price: prc,
+              barcode,
+              quantity: qty,
+              options: options ? options.split(",").map(opt => ({ name: opt.trim() })) : [],
+            }];
 
             await createVariantInBulk(productId, variants, accessToken, shopDomain);
 
@@ -341,6 +377,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
 
         if (!hasErrorOccurred) {
           io.emit("jobCompleted", { status: "completed", jobId: req.file.filename });
+          console.log("CSV processed completely, emitted jobCompleted.");
           return res.status(200).json({ message: "File uploaded and processed successfully." });
         }
       } catch (err) {
@@ -358,10 +395,16 @@ async function createVariantInBulk(productId, variants, accessToken, shopDomain)
   const SHOPIFY_ADMIN_API_URL = getShopifyAdminApiUrl(shopDomain);
 
   const optionId = await getOptionId(productId, accessToken, shopDomain);
-  if (!optionId) throw new Error("Option ID not found");
+  if (!optionId) {
+    console.error("Option ID not found for product:", productId);
+    throw new Error("Option ID not found");
+  }
 
   const locationIds = await getLocationIds(accessToken, shopDomain);
-  if (locationIds.length === 0) throw new Error("No location found for this shop.");
+  if (locationIds.length === 0) {
+    console.error("No location found for this shop.");
+    throw new Error("No location found for this shop.");
+  }
 
   const locationId = locationIds[0];
 
@@ -389,19 +432,20 @@ async function createVariantInBulk(productId, variants, accessToken, shopDomain)
     }
   `;
 
+  // Include inventoryItem with sku as you requested
   const variantData = variants.map((variant) => ({
     price: variant.price?.toString(),
     barcode: variant.barcode,
     inventoryQuantities: [
       {
         availableQuantity: variant.quantity,
-        locationId,
+        locationId: locationId,
       },
     ],
     optionValues: [
       {
-        name: "Meterial", // Confirm spelling if needed
-        optionId,
+        name: "Meterial", // note: check spelling, should be "Material" if intentional
+        optionId: optionId,
       },
     ],
     inventoryItem: {
@@ -409,7 +453,10 @@ async function createVariantInBulk(productId, variants, accessToken, shopDomain)
     },
   }));
 
-  const variables = { productId, variants: variantData };
+  const variables = {
+    productId,
+    variants: variantData,
+  };
 
   const response = await fetch(SHOPIFY_ADMIN_API_URL, {
     method: "POST",
@@ -417,19 +464,33 @@ async function createVariantInBulk(productId, variants, accessToken, shopDomain)
       "Content-Type": "application/json",
       "X-Shopify-Access-Token": accessToken,
     },
-    body: JSON.stringify({ query: mutation, variables }),
+    body: JSON.stringify({
+      query: mutation,
+      variables: variables,
+    }),
   });
 
   const data = await response.json();
 
-  if (data.errors || data.data?.productVariantsBulkCreate?.userErrors?.length > 0) {
-    console.error("Error creating variants:", data.errors || data.data.productVariantsBulkCreate.userErrors);
+  if (
+    data.errors ||
+    data.data?.productVariantsBulkCreate?.userErrors?.length > 0
+  ) {
+    console.error(
+      "Error creating variants:",
+      data.errors || data.data.productVariantsBulkCreate.userErrors
+    );
     throw new Error("Variant creation failed");
   }
+
+  console.log("✅ Product variants created successfully:", data.data.productVariantsBulkCreate.productVariants);
 }
+
 
 async function checkVariantExistsBySku(sku, accessToken, shopDomain) {
   const SHOPIFY_ADMIN_API_URL = getShopifyAdminApiUrl(shopDomain);
+
+  // Query to search for variants by SKU within products
   const query = `
     query {
       products(first: 250, query: "sku:${sku}") {
@@ -468,10 +529,16 @@ async function checkVariantExistsBySku(sku, accessToken, shopDomain) {
     const data = await response.json();
 
     if (data && data.data && data.data.products) {
-      for (const productEdge of data.data.products.edges) {
+      for (let productEdge of data.data.products.edges) {
         const product = productEdge.node;
-        const existingVariant = product.variants.edges.find((variant) => variant.node.sku === sku);
+
+        // Check each variant within the product for the matching SKU
+        const existingVariant = product.variants.edges.find(
+          (variant) => variant.node.sku === sku
+        );
+
         if (existingVariant) {
+          console.log(`Variant with SKU ${sku} already exists:`, product.title);
           return {
             productId: product.id,
             variantId: existingVariant.node.id,
@@ -480,6 +547,8 @@ async function checkVariantExistsBySku(sku, accessToken, shopDomain) {
         }
       }
     }
+
+    console.log("No product/variant found with SKU:", sku);
     return null;
   } catch (error) {
     console.error("Error checking variant existence by SKU:", error);
@@ -487,10 +556,10 @@ async function checkVariantExistsBySku(sku, accessToken, shopDomain) {
   }
 }
 
-async function getLocationIds(accessToken, shopDomain) {
-  const SHOPIFY_ADMIN_API_URL = getShopifyAdminApiUrl(shopDomain);
-  const query = `query { locations(first: 2) { edges { node { id name } } } }`;
 
+async function getLocationIds(accessToken, shopDomain) {
+  const SHOPIFY_ADMIN_API_URL = getShopifyAdminApiUrl(shopDomain); 
+  const query = `query { locations(first: 2) { edges { node { id name } } } }`;
   const response = await fetch(SHOPIFY_ADMIN_API_URL, {
     method: "POST",
     headers: {
@@ -502,15 +571,17 @@ async function getLocationIds(accessToken, shopDomain) {
 
   const data = await response.json();
 
-  if (!data?.data?.locations?.edges) {
-    console.error("Locations data is missing or invalid.");
+  if (!data || !data.data || !data.data.locations || !data.data.locations.edges) {
+    console.error("Error: Locations data is missing or invalid.");
     return [];
   }
 
   return data.data.locations.edges.map((edge) => edge.node.id);
 }
 
-async function createProduct(input, accessToken, shopDomain) {
+
+
+async function createProduct(input, accessToken, shopDomain, sku, prc, qty, barcode, options) {
   const SHOPIFY_ADMIN_API_URL = getShopifyAdminApiUrl(shopDomain);
 
   const mutation = `
@@ -518,6 +589,13 @@ async function createProduct(input, accessToken, shopDomain) {
       productCreate(input: $input) {
         product {
           id
+          title
+          handle
+          tags
+          productType
+          descriptionHtml
+          status
+          vendor
         }
         userErrors {
           field
@@ -527,7 +605,17 @@ async function createProduct(input, accessToken, shopDomain) {
     }
   `;
 
-  const variables = { input };
+  const variables = {
+    input: {
+      title: input.title,
+      tags: input.tags,
+      handle: input.handle,
+      productType: input.productType,
+      descriptionHtml: input.descriptionHtml,
+      status: input.status,
+      vendor: input.vendor,
+    },
+  };
 
   const response = await fetch(SHOPIFY_ADMIN_API_URL, {
     method: "POST",
@@ -535,7 +623,10 @@ async function createProduct(input, accessToken, shopDomain) {
       "Content-Type": "application/json",
       "X-Shopify-Access-Token": accessToken,
     },
-    body: JSON.stringify({ query: mutation, variables }),
+    body: JSON.stringify({
+      query: mutation,
+      variables: variables,
+    }),
   });
 
   const data = await response.json();
@@ -543,14 +634,17 @@ async function createProduct(input, accessToken, shopDomain) {
   if (data.errors || data.data.productCreate.userErrors.length > 0) {
     console.error("Error creating product:", data.errors || data.data.productCreate.userErrors);
     throw new Error("Product creation failed");
+  } else {
+    return data.data.productCreate.product.id; // Return productId for variant creation
   }
-
-  return data.data.productCreate.product.id;
 }
 
-async function updateInventoryInBatch(inventoryItemId, quantity, locationId, accessToken, shopDomain) {
-  const SHOPIFY_ADMIN_API_URL = getShopifyAdminApiUrl(shopDomain);
 
+
+
+
+async function updateInventoryInBatch(inventoryItemId, quantity, locationId, accessToken, shopDomain) {
+  const SHOPIFY_ADMIN_API_URL = getShopifyAdminApiUrl(shopDomain); 
   const mutation = `
     mutation ($input: InventorySetOnHandQuantitiesInput!) {
       inventorySetOnHandQuantities(input: $input) {
@@ -560,7 +654,13 @@ async function updateInventoryInBatch(inventoryItemId, quantity, locationId, acc
 
   const variables = {
     input: {
-      setQuantities: [{ inventoryItemId, quantity, locationId }],
+      setQuantities: [
+        {
+          inventoryItemId,
+          quantity,
+          locationId,
+        },
+      ],
       reason: "correction",
     },
   };
@@ -571,18 +671,23 @@ async function updateInventoryInBatch(inventoryItemId, quantity, locationId, acc
       "Content-Type": "application/json",
       "X-Shopify-Access-Token": accessToken,
     },
-    body: JSON.stringify({ query: mutation, variables }),
+    body: JSON.stringify({
+      query: mutation,
+      variables: variables,
+    }),
   });
 
   const data = await response.json();
 
   if (data.errors || data.data.inventorySetOnHandQuantities.userErrors.length > 0) {
     console.error("Error updating inventory:", data.errors || data.data.inventorySetOnHandQuantities.userErrors);
+  } else {
+    console.log(`Inventory updated for item: ${inventoryItemId}, Quantity: ${quantity}`);
   }
 }
 
 async function updatePricesInBatch(variantId, price, accessToken, shopDomain) {
-  const SHOPIFY_ADMIN_API_URL = getShopifyAdminApiUrl(shopDomain);
+  const SHOPIFY_ADMIN_API_URL = getShopifyAdminApiUrl(shopDomain); 
   const productId = await getProductIdFromVariant(variantId, accessToken, shopDomain);
   if (!productId) {
     console.error("Product not found for variant ID:", variantId);
@@ -605,8 +710,13 @@ async function updatePricesInBatch(variantId, price, accessToken, shopDomain) {
     }`;
 
   const variables = {
-    productId,
-    variants: [{ id: variantId, price: price.toString() }],
+    productId: productId,
+    variants: [
+      {
+        id: variantId,
+        price: price.toString(),
+      },
+    ],
   };
 
   const response = await fetch(SHOPIFY_ADMIN_API_URL, {
@@ -615,18 +725,23 @@ async function updatePricesInBatch(variantId, price, accessToken, shopDomain) {
       "Content-Type": "application/json",
       "X-Shopify-Access-Token": accessToken,
     },
-    body: JSON.stringify({ query: mutation, variables }),
+    body: JSON.stringify({
+      query: mutation,
+      variables: variables,
+    }),
   });
 
   const data = await response.json();
 
   if (data.errors || data.data.productVariantsBulkUpdate.userErrors.length > 0) {
     console.error("Error updating prices:", data.errors || data.data.productVariantsBulkUpdate.userErrors);
+  } else {
+    console.log(`Price updated for variant: ${variantId}, New Price: ${price}`);
   }
 }
 
 async function getProductIdFromVariant(variantId, accessToken, shopDomain) {
-  const SHOPIFY_ADMIN_API_URL = getShopifyAdminApiUrl(shopDomain);
+  const SHOPIFY_ADMIN_API_URL = getShopifyAdminApiUrl(shopDomain); 
   const query = `
     query {
       productVariant(id: "${variantId}") {
@@ -652,9 +767,9 @@ async function getProductIdFromVariant(variantId, accessToken, shopDomain) {
     return null;
   }
 
-  return data.data.productVariant?.product.id;
+  const productId = data.data.productVariant?.product.id;
+  return productId;
 }
-
 async function getVariantAndInventoryItemId(sku, accessToken, shopDomain) {
   const SHOPIFY_ADMIN_API_URL = getShopifyAdminApiUrl(shopDomain);
   const query = `
@@ -678,7 +793,7 @@ async function getVariantAndInventoryItemId(sku, accessToken, shopDomain) {
       }
     }
   `;
-
+  
   const response = await fetch(SHOPIFY_ADMIN_API_URL, {
     method: "POST",
     headers: {
@@ -689,13 +804,9 @@ async function getVariantAndInventoryItemId(sku, accessToken, shopDomain) {
   });
 
   const data = await response.json();
+  console.log("GraphQL Response Data:", JSON.stringify(data, null, 2));
 
-  if (
-    !data.data ||
-    !data.data.products ||
-    !data.data.products.edges ||
-    data.data.products.edges.length === 0
-  ) {
+  if (!data.data || !data.data.products || !data.data.products.edges || data.data.products.edges.length === 0) {
     console.error("Error: No products found or data is malformed.");
     return null;
   }
@@ -715,6 +826,35 @@ async function getVariantAndInventoryItemId(sku, accessToken, shopDomain) {
   };
 }
 
+// Worker to process inventory updates in Bull Queue
+// queue.process(async (job) => {
+//   const {
+//     inventoryItemId,
+//     quantity,
+//     variantId,
+//     price,
+//     locationId,
+//     shopDomain,
+//     sku,
+//   } = job.data;
+//   try {
+//     const accessToken = await getValidAccessToken(shopDomain);
+//     await updateInventoryInBatch(
+//       inventoryItemId,
+//       quantity,
+//       locationId,
+//       accessToken,
+//       shopDomain
+//     );
+//     await updatePricesInBatch(variantId, price, accessToken, shopDomain);
+//     job.progress(100);
+//     io.emit("jobProgress", { jobId: job.id, progress: 100 });
+//     io.emit("jobCompleted", { jobId: job.id, status: "completed" });
+//   } catch (err) {
+//     console.error(`Job ${job.id} failed`, err);
+//     io.emit("jobCompleted", { jobId: job.id, status: "failed" });
+//   }
+// });
 async function getOptionId(productId, accessToken, shopDomain) {
   const SHOPIFY_ADMIN_API_URL = getShopifyAdminApiUrl(shopDomain);
 
@@ -737,7 +877,10 @@ async function getOptionId(productId, accessToken, shopDomain) {
       "Content-Type": "application/json",
       "X-Shopify-Access-Token": accessToken,
     },
-    body: JSON.stringify({ query, variables }),
+    body: JSON.stringify({
+      query: query,
+      variables: variables,
+    }),
   });
 
   const data = await response.json();
@@ -749,5 +892,87 @@ async function getOptionId(productId, accessToken, shopDomain) {
 
   return data.data.product.options[0].id;
 }
+async function updateSkuForInventoryItem(inventoryItemId, sku, accessToken, shopDomain) {
+  const SHOPIFY_ADMIN_API_URL = getShopifyAdminApiUrl(shopDomain);
+
+  const mutation = `
+    mutation updateInventoryItem($id: ID!, $sku: String!) {
+      inventoryItemUpdate(id: $id, input: { sku: $sku }) {
+        inventoryItem {
+          id
+          sku
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `;
+
+  const variables = {
+    id: inventoryItemId,
+    sku: sku,
+  };
+
+  const response = await fetch(SHOPIFY_ADMIN_API_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Shopify-Access-Token": accessToken,
+    },
+    body: JSON.stringify({
+      query: mutation,
+      variables: variables,
+    }),
+  });
+
+  const data = await response.json();
+
+  if (data.errors || data.data.inventoryItemUpdate.userErrors.length > 0) {
+    console.error("Error updating inventory item SKU:", data.errors || data.data.inventoryItemUpdate.userErrors);
+    throw new Error("SKU update failed");
+  } else {
+    console.log(`SKU updated to ${sku} for inventory item ID: ${inventoryItemId}`);
+  }
+}
+// async function getOptionId(productId, accessToken, shopDomain) {
+//   const SHOPIFY_ADMIN_API_URL = getShopifyAdminApiUrl(shopDomain);
+
+//   const query = `
+//     query getOptions($id: ID!) {
+//       product(id: $id) {
+//         options {
+//           name
+//           id
+//         }
+//       }
+//     }
+//   `;
+
+//   const variables = { id: productId };
+
+//   const response = await fetch(SHOPIFY_ADMIN_API_URL, {
+//     method: "POST",
+//     headers: {
+//       "Content-Type": "application/json",
+//       "X-Shopify-Access-Token": accessToken,
+//     },
+//     body: JSON.stringify({
+//       query: query,
+//       variables: variables,
+//     }),
+//   });
+
+//   const data = await response.json();
+
+//   if (data.errors || !data.data.product.options.length) {
+//     console.error("Error fetching options:", data.errors || "No options found");
+//     throw new Error("Failed to fetch product options");
+//   }
+
+//   return data.data.product.options[0].id;  // Assuming the first option is what we need
+// }
+
 
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
