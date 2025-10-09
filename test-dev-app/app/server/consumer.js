@@ -14,6 +14,9 @@ import cors from "cors";
 import prisma from "../db.server.js";
 import crypto from "crypto";
 import session from "express-session";
+import Shopify from 'shopify-api-node';
+
+
 
 dotenv.config();
 const app = express();
@@ -109,7 +112,7 @@ async function getValidAccessToken(shop) {
 function getShopifyAdminApiUrl(shopDomain) {
   return `https://${shopDomain}/admin/api/2025-01/graphql.json`;
 }
-
+app.use(express.json());
 // Shopify OAuth flow
 app.get("/shopify/authorize", (req, res) => {
   const shop = req.query.shop;
@@ -119,7 +122,7 @@ app.get("/shopify/authorize", (req, res) => {
 
   const apiKey = process.env.SHOPIFY_API_KEY;
   const scopes = "read_products,write_products,read_locations";
-  const redirectUri = `${applicationUrl}/shopify/callback`;
+  const redirectUri = `https://${shop}/admin/apps/${process.env.APP_NAME}`;
 
   const state = crypto.randomBytes(16).toString("hex");
   req.session.state = state;
@@ -973,6 +976,154 @@ async function updateSkuForInventoryItem(inventoryItemId, sku, accessToken, shop
 
 //   return data.data.product.options[0].id;  // Assuming the first option is what we need
 // }
+
+app.post("/api/active-plan", async (req, res) => {
+  const { plan, shop } = req.body;
+  console.log("Received request:", { plan, shop });
+
+  if (!plan || !shop) {
+    console.error("Error: Missing plan or shop in request.");
+    return res.status(400).json({ error: "Missing plan or shop" });
+  }
+
+  const plans = {
+    basic: { name: "Basic", price: 4.99, trial_days: 7 },
+    pro: { name: "Pro", price: 9.99, trial_days: 7 },
+  };
+
+  const selectedPlan = plans[plan];
+  if (!selectedPlan) {
+    console.error("Error: Invalid plan.");
+    return res.status(400).json({ error: "Invalid plan" });
+  }
+
+  try {
+    // Use the `shop` as unique identifier now
+    let session = await prisma.session.findFirst({ where: { shop } });
+
+    // If no session is found, create a new one
+    if (!session) {
+      console.log("No existing session found, creating a new session for the store:", shop);
+      const accessToken = "newly_generated_access_token";  // Replace with the actual access token you retrieve from Shopify
+      session = await prisma.session.create({
+        data: {
+          shop,
+          accessToken,
+          activePlan: selectedPlan.name, // Set initial plan
+          isOnline: true,
+        },
+      });
+      console.log("New session created:", session);
+    } else {
+      // If the session exists, update the active plan
+      console.log("Updating active plan for the store:", shop);
+      session = await prisma.session.update({
+        where: { shop }, // Using `shop` as unique identifier
+        data: { activePlan: selectedPlan.name },
+      });
+      console.log("Session updated with new active plan:", session);
+    }
+
+    // Create a new Shopify instance with the store's access token
+    const shopify = new Shopify({
+      shopName: shop.replace(".myshopify.com", ""),
+      accessToken: session.accessToken,
+    });
+
+    // Create the recurring charge with Shopify
+    const charge = await shopify.recurringApplicationCharge.create({
+      name: selectedPlan.name,
+      price: selectedPlan.price,
+      return_url: `https://${shop}/admin/apps/${process.env.APP_NAME}`,
+      trial_days: selectedPlan.trial_days,
+      test: process.env.NODE_ENV !== "production", // Use test flag for development
+    });
+
+    // Return confirmation URL to the frontend
+    res.json({ confirmationUrl: charge.confirmation_url });
+
+  } catch (err) {
+    console.error("Error during billing process:", err);
+    res.status(500).json({ error: "Failed to create billing session" });
+  }
+});
+
+
+
+
+
+
+
+app.get('/billing/callback', async (req, res) => {
+  const { shop, charge_id } = req.query;
+
+  if (!shop || !charge_id) {
+    return res.status(400).send('Missing params');
+  }
+
+  try {
+    console.log('[CALLBACK]', { shop, charge_id });
+
+    // Retrieve the session from your database
+    const session = await prisma.session.findFirst({ where: { shop } });
+    if (!session || !session.accessToken) {
+      console.log('Session not found or missing accessToken');
+      return res.status(401).send('Access token not found');
+    }
+
+    const shopify = new Shopify({
+      shopName: shop.replace('.myshopify.com', ''),
+      accessToken: session.accessToken,
+    });
+
+    // Get the charge details from Shopify
+    const charge = await shopify.recurringApplicationCharge.get(charge_id);
+    console.log('Charge status:', charge.status, '| name:', charge.name);
+
+    // If the charge was accepted, activate it
+    if (charge.status === 'accepted' || charge.status === 'active') {
+      if (charge.status === 'accepted') {
+        // Activate the charge if it was accepted
+        await shopify.recurringApplicationCharge.activate(charge_id);
+        console.log('Charge activated.');
+      }
+
+      // Save the active plan in the session or database
+      // Use session.id to uniquely identify the session and avoid issues with other stores
+      await prisma.session.update({
+        where: { id: session.id },
+        data: { activePlan: charge.name },
+      });
+      console.log('Session updated with plan:', charge.name);
+    }
+
+    // Redirect the user to your app's admin page
+    const appUrl = `https://${shop}/admin/apps/${process.env.APP_NAME}`;
+    res.send(`
+      <html>
+        <head>
+          <script>
+            window.top.location.href = "${appUrl}";
+          </script>
+        </head>
+        <body>
+          <p>Redirecting to your app...</p>
+        </body>
+      </html>
+    `);
+  } catch (err) {
+    console.error(`[${shop}] Billing callback error:`, err);
+    res.status(500).send('Failed to activate billing.');
+  }
+});
+
+
+
+
+
+
+
+
 
 
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));

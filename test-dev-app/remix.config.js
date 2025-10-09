@@ -28,5 +28,6 @@ module.exports = {
     '/app/error': require.resolve('./app/error.jsx'),
     '/app/upgrade': require.resolve('./app/routes/app.upgrade.jsx'),
     '/app/pricing': require.resolve('./app/routes/app.pricing.jsx'),
+    '/api/active-plan': require.resolve('./app/routes/api/active-plan.js'),
   },
 };

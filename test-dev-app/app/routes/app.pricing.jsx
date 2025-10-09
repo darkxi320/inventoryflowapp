@@ -1,99 +1,172 @@
-import { Page, Card, Text, Button, Divider, Grid, BlockStack, ExceptionList } from '@shopify/polaris';
-import { useLoaderData } from "@remix-run/react";
-import { ChevronRightIcon } from '@shopify/polaris-icons';
+import { useState, useEffect } from "react";
+import { useLoaderData, useNavigate } from "@remix-run/react";
+import {
+  Page,
+  Card,
+  Button,
+  Text,
+  Banner,
+  Spinner,
+  Badge,
+} from "@shopify/polaris";
 
-export async function loader({ request }) {
-  const { billing } = await import("../shopify.server");
+export const loader = async ({ request }) => {
+  const url = new URL(request.url);
+  return { shop: url.searchParams.get("shop") || "" };
+};
 
-  try {
-    // Check the current billing plan
-    const billingCheck = await billing.require({
-      plans: ['Monthly subscription', 'Annual subscription'],
-      onFailure: () => {
-        throw new Error("No active plan");
-      },
-    });
+export default function Billing() {
+  const { shop: shopFromLoader } = useLoaderData();
+  const [shop, setShop] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
+  const [selected, setSelected] = useState("");
+  const [activePlan, setActivePlan] = useState("");
+  const navigate = useNavigate();
 
-    const subscription = billingCheck.appSubscriptions[0];
-    return { billing, plan: subscription };
-  } catch (error) {
-    return { billing, plan: { name: "Free" } }; // Default to free plan if no active subscription
-  }
-}
+  // Initialize shop domain from the URL or localStorage
+  useEffect(() => {
+    if (shopFromLoader) {
+      localStorage.setItem("shop_origin", shopFromLoader);
+      setShop(shopFromLoader);
+    } else {
+      const saved = localStorage.getItem("shop_origin");
+      if (saved) {
+        setShop(saved);
+        navigate(`?shop=${saved}`, { replace: true });
+      }
+    }
+  }, [shopFromLoader]);
 
-export default function PricingPage() {
-  const { plan } = useLoaderData();
+  // Fetch active plan when the shop is set
+  useEffect(() => {
+    if (!shop) return;
 
-  const planData = [
-    {
-      title: "Free",
-      description: "Free plan with basic features",
-      price: "0",
-      action: "Upgrade to pro",
-      name: "Free",
-      url: "/app/upgrade",
-      features: [
-        "Basic inventory tracking",
-        "Manual product imports",
-        "Simple product categorization",
-        "Stock level alerts",
-        "Email support",
-        "Basic inventory analytics"
-      ]
-    },
-    {
-      title: "Pro",
-      description: "Pro plan with advanced features",
-      price: "10",
-      name: "Monthly subscription",
-      action: "Upgrade to pro",
-      url: "/app/upgrade",
-      features: [
-        "Unlimited inventory tracking",
-        "Bulk product imports and exports",
-        "Advanced product categorization",
-        "Real-time stock level updates",
-        "Priority customer support",
-        "Advanced inventory analytics and reporting"
-      ]
-    },
+    const fetchActivePlan = async () => {
+      try {
+        const res = await fetch(`http://localhost:6004/api/active-plan?shop=${shop}`);
+        const data = await res.json();
+        if (data.activePlan) {
+          setActivePlan(data.activePlan);
+        } else {
+          setActivePlan("");
+        }
+      } catch (e) {
+        console.error("Error fetching active plan:", e);
+        setActivePlan("");
+      }
+    };
+
+    fetchActivePlan();
+  }, [shop, selected]);
+
+  const choosePlan = async (plan) => {
+    setLoading(true);
+    setError("");
+    setInfo("");
+    setSelected(plan);
+
+    try {
+      // Send plan and shop details to backend API
+      const response = await fetch(`http://localhost:6004/api/active-plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan, shop }),
+      });
+
+      const data = await response.json();
+      setLoading(false);
+
+      // Handle the confirmation URL from the backend
+      if (data.confirmationUrl) {
+        setInfo("Redirecting to Shopify billing...");
+        window.top.location.href = data.confirmationUrl; // This will redirect to Shopify's billing page
+      } else {
+        setError(data.error || "Failed to start billing.");
+      }
+    } catch (e) {
+      setLoading(false);
+      setError("Network or server error. See console for details.");
+      console.error("Error during billing process:", e);
+    }
+  };
+
+  const plans = [
+    { key: "basic", name: "Basic", price: 4.99, description: "Basic analytics & support" },
+    { key: "pro", name: "Pro", price: 9.99, description: "Advanced analytics & priority support" },
   ];
 
   return (
-    <Page title="Pricing">
-      <Card title="Change your plan" sectioned>
-        {plan.name === "Monthly subscription" ? (
-          <Text variant="bodyMd">You're currently on the Pro plan. All features are unlocked.</Text>
-        ) : (
-          <Text variant="bodyMd">You're currently on the Free plan. Upgrade to Pro to unlock more features.</Text>
+    <Page title="Your Subscription Plan">
+      <div style={{ maxWidth: 540, margin: "0 auto", marginTop: 40 }}>
+        {error && (
+          <div style={{ marginBottom: 24 }}>
+            <Banner status="critical" title="Error">{error}</Banner>
+          </div>
         )}
-        <Button primary url="/app/upgrade">
-          {plan.name === "Monthly subscription" ? "Cancel Subscription" : "Upgrade to Pro"}
-        </Button>
-      </Card>
+        {info && (
+          <div style={{ marginBottom: 24 }}>
+            <Banner status="info">{info}</Banner>
+          </div>
+        )}
+        {activePlan && (
+          <div style={{ marginBottom: 24 }}>
+            <Banner status="success">
+              <Text variant="headingMd" as="span">Current Subscription: </Text>
+              <Badge status="success">{activePlan}</Badge>
+            </Banner>
+          </div>
+        )}
 
-      <Divider />
+        <div style={{ display: "flex", flexDirection: "column", gap: 32 }}>
+          {plans.map((plan) => {
+            const isActive =
+              activePlan &&
+              activePlan.toLowerCase().trim() === plan.name.toLowerCase();
 
-      <Grid>
-        {planData.map((plan_item, index) => (
-          <Grid.Cell key={index} columnSpan={{xs: 6, sm: 3, md: 3, lg: 6, xl: 6}}>
-            <Card background={plan_item.name === plan.name ? "bg-surface-success" : "bg-surface"} sectioned>
-              <Text as="h3" variant="headingMd">{plan_item.title}</Text>
-              <Text as="p" variant="bodyMd">{plan_item.description}</Text>
-              <Text as="p" variant="headingLg" fontWeight="bold">{plan_item.price === "0" ? "" : "$" + plan_item.price}</Text>
-              <BlockStack gap={100}>
-                {plan_item.features.map((feature, idx) => (
-                  <ExceptionList
-                    key={idx}
-                    items={[{ icon: ChevronRightIcon, description: feature }]}
-                  />
-                ))}
-              </BlockStack>
-              <Button primary url={plan_item.url}>{plan_item.action}</Button>
-            </Card>
-          </Grid.Cell>
-        ))}
-      </Grid>
+            return (
+              <Card
+                key={plan.key}
+                sectioned
+                style={{
+                  border: isActive ? "2px solid #008060" : undefined,
+                  background: isActive ? "#F6FFF8" : undefined,
+                  boxShadow: isActive ? "0 2px 16px #b1ecd133" : "0 1px 2px #f4f4f4",
+                }}
+              >
+                <div style={{ display: "flex", flexDirection: "column", gap: 12, minHeight: 120 }}>
+                  <Text variant="headingLg" as="h2" style={{ fontWeight: 600 }}>
+                    ${plan.price}/month
+                  </Text>
+                  <Text color="subdued">{plan.description}</Text>
+                  <div style={{ marginTop: "auto" }}>
+                    {isActive ? (
+                      <Button primary disabled fullWidth>Selected ✓</Button>
+                    ) : (
+                      <Button
+                        primary
+                        fullWidth
+                        loading={loading && selected === plan.key}
+                        onClick={() => choosePlan(plan.key)}
+                        disabled={loading}
+                      >
+                        {loading && selected === plan.key ? <Spinner size="small" /> : "Choose " + plan.name}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+
+        {!activePlan && (
+          <div style={{ marginTop: 20, textAlign: "center", color: "#AAA" }}>
+            <small>Debug: No plan activated yet. Pay for a plan to see the badge.</small>
+          </div>
+        )}
+      </div>
     </Page>
   );
 }
